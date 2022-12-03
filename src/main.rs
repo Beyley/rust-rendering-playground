@@ -3,10 +3,19 @@ use std::ptr;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::mem::size_of;
+use std::cell::Cell;
+
+mod texture;
+
+use texture::load_texture;
+
+fn glfw_callback(err: glfw::Error, message: String, _: &()) {
+    println!("GLFW Error {}: {}", err, message);
+}
 
 fn main() {
     //Init GLFW
-    let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).expect("Failed to initialize GLFW!");
+    let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).expect("Failed to initialize GLFW");
 
     //Hint to use GL 3.1 core
     glfw.window_hint(glfw::WindowHint::ContextVersionMajor(3));
@@ -14,8 +23,13 @@ fn main() {
     glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::OpenGl));
     glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
 
+    glfw.set_error_callback(Some(glfw::Callback {
+        f: glfw_callback,
+        data: ()
+    }));
+
     //Create the window
-    let (mut window, events) = glfw.create_window(300, 300, "Hello Window", glfw::WindowMode::Windowed).expect("Failed to create GLFW window.");
+    let (mut window, events) = glfw.create_window(300, 300, "Hello Window", glfw::WindowMode::Windowed).expect("Failed to create GLFW window");
 
     //Enable key event polling
     window.set_key_polling(true);
@@ -35,58 +49,85 @@ fn main() {
     }
 
     //Create shaders
-    let vtxShader = rgl::shaders::create_shader(rgl::ShaderType::Vertex);
-    let frgShader = rgl::shaders::create_shader(rgl::ShaderType::Fragment);
+    let vtx_shader = rgl::shaders::create_shader(rgl::ShaderType::Vertex);
+    let frg_shader = rgl::shaders::create_shader(rgl::ShaderType::Fragment);
 
     //Set the source code of the shaders
-    rgl::shaders::shader_source(vtxShader, "#version 330 core
-layout (location = 0) in vec3 aPos;
+    rgl::shaders::shader_source(vtx_shader, "#version 330 core
+layout (location = 0) in vec2 aPos;
+layout (location = 1) in vec2 vtxTexCoord;
+
+out vec2 texCoord;
 
 void main()
 {
-    gl_Position = vec4(aPos.x, aPos.y, aPos.z, 1.0);
+    gl_Position = vec4(aPos.xy, 0, 1.0);
+    texCoord = vtxTexCoord;
 }
 ");
-    rgl::shaders::shader_source(frgShader, "#version 330 core
+    rgl::shaders::shader_source(frg_shader, "#version 330 core
+
+in vec2 texCoord;
+
 out vec4 FragColor;
+
+uniform sampler2D textureSampler;
+
 void main()
 {
-    FragColor = vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    FragColor = texture(textureSampler, texCoord);
 }
 ");
 
     //Compile the shaders
-    rgl::shaders::compile_shader(vtxShader);
-    rgl::shaders::compile_shader(frgShader);
+    rgl::shaders::compile_shader(vtx_shader);
+    rgl::shaders::compile_shader(frg_shader);
 
     //Create the shader program
     let program = rgl::shaders::create_program();
 
     //Attach both shaders to the program
-    rgl::shaders::attach_shader(program, vtxShader);
-    rgl::shaders::attach_shader(program, frgShader);
+    rgl::shaders::attach_shader(program, vtx_shader);
+    rgl::shaders::attach_shader(program, frg_shader);
 
     //Link the program
     rgl::shaders::link_program(program);
 
     //Delete the shaders
-    rgl::shaders::delete_shader(vtxShader);
-    rgl::shaders::delete_shader(frgShader);
+    rgl::shaders::delete_shader(vtx_shader);
+    rgl::shaders::delete_shader(frg_shader);
 
+    //Generate a vertex array and vertex buffer
     let vao = rgl::buffers::gen_vertex_array();
     let vbo = rgl::buffers::gen_buffer();
+    let ebo = rgl::buffers::gen_buffer();
 
-    let vertices: [f32; 9] = [
-        -0.5, -0.5, 0.0,
-        0.5, -0.5, 0.0,
-        0.0,  0.5, 0.0
+    let vertices: &[f32] = &[
+        -0.5, -0.5, 0.0, 1.0, //bottom left
+        -0.5,  0.5, 0.0, 0.0, //top left
+         0.5, -0.5, 1.0, 1.0, //bottom right
+         0.5,  0.5, 1.0, 0.0  //top right
+    ];
+
+    let indices: &[u16] = &[
+        0, 1, 2,
+        3, 1, 2
     ];
 
     rgl::buffers::bind_vertex_array(vao);
     rgl::buffers::bind_buffer(rgl::Target::ArrayBuffer, vbo);
     rgl::buffers::buffer_data(rgl::Target::ArrayBuffer, &vertices, rgl::Usage::StaticDraw);
-    rgl::buffers::vertex_attrib_pointer(0, 3, rgl::Type::Float, false, (size_of::<f32>() * 3) as i32);
+    rgl::buffers::bind_buffer(rgl::Target::ElementArrayBuffer, ebo);
+    rgl::buffers::buffer_data(rgl::Target::ElementArrayBuffer, &indices, rgl::Usage::StaticDraw);
+    unsafe {
+        gl::VertexAttribPointer(0, 2, gl::FLOAT, gl::FALSE, (size_of::<f32>() * 4) as i32, 0 as *const c_void);
+        gl::VertexAttribPointer(1, 2, gl::FLOAT, gl::FALSE, (size_of::<f32>() * 4) as i32, (size_of::<f32>() * 2) as *const c_void);
+    }
     rgl::buffers::enable_vertex_attrib_array(0);
+    rgl::buffers::enable_vertex_attrib_array(1);
+
+    //Load texture
+    let tex = load_texture("texture.png");
 
     //Enable VSync
     glfw.set_swap_interval(glfw::SwapInterval::Sync(1));
@@ -106,7 +147,8 @@ void main()
 
         rgl::shaders::use_program(program);
         rgl::buffers::bind_vertex_array(vao);
-        rgl::drawing::draw_arrays(rgl::Primitive::Triangles, 0, 3);
+        rgl::textures::bind_texture(rgl::TexTarget::_2D, tex);
+        rgl::drawing::draw_elements(rgl::Primitive::Triangles, 6, rgl::Type::UShort);
 
         window.swap_buffers();
     }
