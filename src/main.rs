@@ -59,9 +59,11 @@ layout (location = 1) in vec2 vtxTexCoord;
 
 out vec2 texCoord;
 
+uniform mat3x2 projectionMatrix;
+
 void main()
 {
-    gl_Position = vec4(aPos.xy, 0, 1.0);
+    gl_Position = vec4(projectionMatrix * vec3(aPos, 1.0), 0.0, 1.0);
     texCoord = vtxTexCoord;
 }
 ");
@@ -93,6 +95,28 @@ void main()
     //Link the program
     rgl::shaders::link_program(program);
 
+    unsafe {
+        let mut link_status = 0;
+
+        gl::GetProgramiv(*(&program as *const _ as *const u32), gl::LINK_STATUS, &mut link_status);
+
+        println!("Program link status: {}", link_status);
+
+        if link_status == 0 {
+            let mut info_log_length = 0;
+            let mut log: [u8; 1000] = [0; 1000];
+
+            gl::GetProgramInfoLog(*(&program as *const _ as *const u32), log.len() as i32, &mut info_log_length, log.as_mut_ptr() as *mut _);
+
+            let mut str = CStr::from_bytes_with_nul(&log).expect("wat");
+
+            println!("Program info log: {}", str.to_str().unwrap());
+            panic!("Failed to link program");
+        }
+    }
+
+    println!("Linking shader");
+
     //Delete the shaders
     rgl::shaders::delete_shader(vtx_shader);
     rgl::shaders::delete_shader(frg_shader);
@@ -102,11 +126,12 @@ void main()
     let vbo = rgl::buffers::gen_buffer();
     let ebo = rgl::buffers::gen_buffer();
 
+    let size: f32 = 100.0;
     let vertices: &[f32] = &[
-        -0.5, -0.5, 0.0, 1.0, //bottom left
-        -0.5,  0.5, 0.0, 0.0, //top left
-         0.5, -0.5, 1.0, 1.0, //bottom right
-         0.5,  0.5, 1.0, 0.0  //top right
+        0.0,  0.0,  0.0, 0.0, //bottom left
+        0.0,  size, 0.0, 1.0, //top left
+        size, 0.0,  1.0, 0.0, //bottom right
+        size, size, 1.0, 1.0  //top right
     ];
 
     let indices: &[u16] = &[
@@ -135,7 +160,7 @@ void main()
     while !window.should_close() {
         glfw.poll_events();
         for (_, event) in glfw::flush_messages(&events) {
-            handle_window_event(&mut window, event);
+            handle_window_event(&mut window, event, program);
         }
 
         //Set the clear color to 0, 0, 0, 1
@@ -162,7 +187,7 @@ extern "system" fn gl_debug_callback(_source: u32, _error_type: u32, _id: u32, _
     }
 }
 
-fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent) {
+fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent, program: rgl::Program) {
     match event {
         glfw::WindowEvent::Key(Key::Escape, _, Action::Press, _) => {
             window.set_should_close(true)
@@ -171,8 +196,25 @@ fn handle_window_event(window: &mut glfw::Window, event: glfw::WindowEvent) {
             unsafe {
                 println!("Changing framebuffer size to {}x{}", width, height);
                 gl::Viewport(0, 0, width, height);
+
+                update_projection_matrix(program, width as f32, height as f32);
             }
         }
         _ => {}
+    }
+}
+
+fn update_projection_matrix(program: rgl::Program, width: f32, height: f32) {
+    let matrix = [
+            [2.0 / width, 0.0, -1.0], // Row 0
+            [0.0, -2.0 / height, 1.0], // Row 1
+        ];
+
+    let uniform_location = rgl::get_uniform_location(program, "projectionMatrix");
+
+    println!("Updating uniform");
+
+    unsafe {
+        gl::UniformMatrix3x2fv(*(&uniform_location as *const _ as *const i32), 1, gl::TRUE, matrix.as_ptr() as *const _);
     }
 }
