@@ -4,6 +4,15 @@ pub struct Renderer {
     pub program: Option<rgl::Program>
 }
 
+impl Drop for Renderer {
+    fn drop(&mut self) {
+        if let Some(x) = self.program {
+            rgl::shaders::delete_program(x);
+            self.program = None;
+        }
+    }
+}
+
 impl Renderer {
     pub fn new() -> Self {
         Renderer {
