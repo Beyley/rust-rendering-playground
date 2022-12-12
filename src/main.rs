@@ -3,9 +3,9 @@ use std::ptr;
 use std::ffi::c_void;
 use std::ffi::CStr;
 use std::mem::size_of;
-use std::cell::Cell;
 
 mod texture;
+mod renderer;
 
 use texture::load_texture;
 
@@ -17,7 +17,7 @@ fn main() {
     //Init GLFW
     let mut glfw = glfw::init(glfw::FAIL_ON_ERRORS).expect("Failed to initialize GLFW");
 
-    //Hint to use GL 3.1 core
+    //Hint to use GL 3.2 core
     glfw.window_hint(glfw::WindowHint::ContextVersionMajor(3));
     glfw.window_hint(glfw::WindowHint::ContextVersionMinor(2));
     glfw.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::OpenGl));
@@ -48,78 +48,9 @@ fn main() {
         gl::DebugMessageCallback(gl_debug_callback, ptr::null());
     }
 
-    //Create shaders
-    let vtx_shader = rgl::shaders::create_shader(rgl::ShaderType::Vertex);
-    let frg_shader = rgl::shaders::create_shader(rgl::ShaderType::Fragment);
+    let mut renderer = renderer::Renderer::new();
 
-    //Set the source code of the shaders
-    rgl::shaders::shader_source(vtx_shader, "#version 330 core
-layout (location = 0) in vec2 aPos;
-layout (location = 1) in vec2 vtxTexCoord;
-
-out vec2 texCoord;
-
-uniform mat3x2 projectionMatrix;
-
-void main()
-{
-    gl_Position = vec4(projectionMatrix * vec3(aPos, 1.0), 0.0, 1.0);
-    texCoord = vtxTexCoord;
-}
-");
-    rgl::shaders::shader_source(frg_shader, "#version 330 core
-
-in vec2 texCoord;
-
-out vec4 FragColor;
-
-uniform sampler2D textureSampler;
-
-void main()
-{
-    FragColor = texture(textureSampler, texCoord);
-}
-");
-
-    //Compile the shaders
-    rgl::shaders::compile_shader(vtx_shader);
-    rgl::shaders::compile_shader(frg_shader);
-
-    //Create the shader program
-    let program = rgl::shaders::create_program();
-
-    //Attach both shaders to the program
-    rgl::shaders::attach_shader(program, vtx_shader);
-    rgl::shaders::attach_shader(program, frg_shader);
-
-    //Link the program
-    rgl::shaders::link_program(program);
-
-    unsafe {
-        let mut link_status = 0;
-
-        gl::GetProgramiv(*(&program as *const _ as *const u32), gl::LINK_STATUS, &mut link_status);
-
-        println!("Program link status: {}", link_status);
-
-        if link_status == 0 {
-            let mut info_log_length = 0;
-            let mut log: [u8; 1000] = [0; 1000];
-
-            gl::GetProgramInfoLog(*(&program as *const _ as *const u32), log.len() as i32, &mut info_log_length, log.as_mut_ptr() as *mut _);
-
-            let mut str = CStr::from_bytes_with_nul(&log).expect("wat");
-
-            println!("Program info log: {}", str.to_str().unwrap());
-            panic!("Failed to link program");
-        }
-    }
-
-    println!("Linking shader");
-
-    //Delete the shaders
-    rgl::shaders::delete_shader(vtx_shader);
-    rgl::shaders::delete_shader(frg_shader);
+    renderer.create_program();
 
     //Generate a vertex array and vertex buffer
     let vao = rgl::buffers::gen_vertex_array();
@@ -157,11 +88,18 @@ void main()
     //Enable VSync
     glfw.set_swap_interval(glfw::SwapInterval::Sync(1));
 
+    rgl::shaders::use_program(renderer.program.unwrap());
+
+    //Reset the time to 0
+    glfw.set_time(0.0);
     while !window.should_close() {
         glfw.poll_events();
         for (_, event) in glfw::flush_messages(&events) {
-            handle_window_event(&mut window, event, program);
+            handle_window_event(&mut window, event, renderer.program.unwrap());
         }
+
+        //Get the current time of the program
+        //let time_s: f64 = glfw.get_time();
 
         //Set the clear color to 0, 0, 0, 1
         rgl::drawing::clear_color(0.0, 0.0, 0.0, 1.0);
@@ -170,7 +108,6 @@ void main()
             gl::Clear(gl::COLOR_BUFFER_BIT);
         }
 
-        rgl::shaders::use_program(program);
         rgl::buffers::bind_vertex_array(vao);
         rgl::textures::bind_texture(rgl::TexTarget::_2D, tex);
         rgl::drawing::draw_elements(rgl::Primitive::Triangles, 6, rgl::Type::UShort);
@@ -212,9 +149,9 @@ fn update_projection_matrix(program: rgl::Program, width: f32, height: f32) {
 
     let uniform_location = rgl::get_uniform_location(program, "projectionMatrix");
 
-    println!("Updating uniform");
 
     unsafe {
+        println!("Updating proj matrix uniform:{}", *(&uniform_location as *const _ as *const i32));
         gl::UniformMatrix3x2fv(*(&uniform_location as *const _ as *const i32), 1, gl::TRUE, matrix.as_ptr() as *const _);
     }
 }
